@@ -2,27 +2,76 @@
 
 Upload a CSV of up to 20 hospitals. The service creates them through the [Hospital Directory API](https://hospital-directory.onrender.com/docs) under one batch ID, and activates the batch only if **every** hospital was created. If anything fails, it deletes the batch, so no half-finished batch is left behind.
 
-## Run it
+## Run locally
+
+Requires Python 3.10+.
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+# 1. Set up (first time only)
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 
-uvicorn app.main:app --reload --env-file .env   # http://127.0.0.1:8000/docs
-pytest                                          # run the tests
+# 2. Start the API (leave it running)
+uvicorn app.main:app --reload
 ```
+
+Open http://127.0.0.1:8000/docs to try every endpoint in the browser. Press `Ctrl + C` to stop.
+
+```bash
+# 3. Run the tests (in another terminal, after `source .venv/bin/activate`)
+pytest
+```
+
+No configuration is needed; the defaults work. To change a setting, create a `.env` file (see [Settings](#settings-env)) and start with `uvicorn app.main:app --reload --env-file .env`.
 
 ## API
 
-| Method | Path | What it does |
-| --- | --- | --- |
-| `POST` | `/hospitals/bulk` | Upload a CSV, then create and activate all hospitals (or none) |
-| `POST` | `/hospitals/bulk/validate` | Check a CSV without creating anything |
-| `GET` | `/hospitals/bulk/{batch_id}` | Get the result of an earlier upload |
-| `GET` | `/health` | Health check |
+**Base URL:** `http://127.0.0.1:8000` when running locally. All paths below are relative to it.
+
+Set it once in your terminal to use the `curl` examples:
 
 ```bash
-curl -F "file=@sample_data/valid_hospitals.csv" http://127.0.0.1:8000/hospitals/bulk
+BASE_URL=http://127.0.0.1:8000
+```
+
+**Interactive docs (Swagger UI):** `$BASE_URL/docs`. Every endpoint has a **Try it out** button with a file picker.
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | `/health` | Health check |
+| `POST` | `/hospitals/bulk/validate` | Check a CSV without creating anything |
+| `POST` | `/hospitals/bulk` | Upload a CSV, then create and activate all hospitals (or none) |
+| `GET` | `/hospitals/bulk/{batch_id}` | Get the result of an earlier upload |
+
+Both `POST` endpoints take **multipart form data** with the CSV in a field named `file`. In Postman: **Body → form-data**, key `file`, type **File**.
+
+### Health check
+
+```bash
+curl $BASE_URL/health
+```
+
+```json
+{"status": "ok"}
+```
+
+### Validate a CSV
+
+```bash
+curl -F "file=@sample_data/valid_hospitals.csv" $BASE_URL/hospitals/bulk/validate
+```
+
+```json
+{"valid": true, "total_hospitals": 3, "errors": []}
+```
+
+### Bulk create
+
+This calls the real Hospital Directory API.
+
+```bash
+curl -F "file=@sample_data/valid_hospitals.csv" $BASE_URL/hospitals/bulk
 ```
 
 ```json
@@ -44,6 +93,29 @@ curl -F "file=@sample_data/valid_hospitals.csv" http://127.0.0.1:8000/hospitals/
 **Batch `status`:** `completed` (all created and activated), `failed` (something failed and the batch was deleted), or `cleanup_required` (something failed and the delete also failed, so check upstream by hand).
 
 **Hospital `status`:** `created_and_activated`, `failed`, `rolled_back` (created, then deleted with the batch), or `created` (only when cleanup failed).
+
+### Get a batch result
+
+```bash
+curl $BASE_URL/hospitals/bulk/550e8400-e29b-41d4-a716-446655440000
+```
+
+This returns the same JSON as the bulk create response, or `404` if the batch ID is unknown.
+
+### Errors
+
+| Status | When |
+| --- | --- |
+| `422` | Invalid CSV (errors listed per row), or no `file` in the request |
+| `415` | The file isn't a `.csv` |
+| `413` | The file is over 1 MB |
+| `404` | Unknown batch ID |
+
+```json
+{"detail": {"message": "CSV validation failed", "errors": [{"row": 1, "field": "address", "message": "address is required"}]}}
+```
+
+The upstream API runs on Render's free tier and can take about 50 seconds to wake up. If the first upload fails with timeouts, open https://hospital-directory.onrender.com/docs once to wake it, then retry.
 
 ## CSV format
 
